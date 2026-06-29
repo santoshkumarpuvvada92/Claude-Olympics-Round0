@@ -1,0 +1,28 @@
+# Secrets & credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials/
+
+# Runtime output
+leaderboard.png
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+
+# OS & editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
