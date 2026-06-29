@@ -1,47 +1,27 @@
 # Approach Summary — Round 0 (Ignition)
 
-## What I did
+## 1. Repairs & Fixes
 
-**Phase 1 — Repair the tool**
+The tool ran without crashing but produced wrong numbers. Four code-level issues were fixed:
 
-I opened `medal_report.py` and read it critically before running it. I identified five issues:
+- **Command injection** — `os.system("echo ... " + REPORT_EMAIL)` concatenated user-controlled input into a shell call. Replaced with a plain `print()`.
+- **Silent data loss** — a bare `except: pass` silently swallowed every row that failed the medal lookup. Replaced with `except KeyError:` and a skip counter that reports how many rows were dropped and why.
+- **Non-numeric DataFrame** — `pd.DataFrame(counts).T` produced object-dtype columns, making numeric sort unreliable. Fixed with `pd.DataFrame.from_dict(..., orient="index", dtype=float)`.
+- **Hardcoded API token** — a live credential was committed in source. Moved to `os.environ.get()`.
 
-1. **Command injection** (`os.system("echo ... " + REPORT_EMAIL)`) — string concatenation into a shell call is a security flaw. Fixed by replacing with `print()`.
-2. **Silent data loss** (bare `except: pass`) — any row with an unrecognised medal value was silently dropped with no count or warning. Fixed by catching only `KeyError` and reporting a skip count.
-3. **Wrong DataFrame construction** (`pd.DataFrame(counts).T`) — produces object-dtype columns, making numeric sort unreliable. Fixed with `pd.DataFrame.from_dict(..., orient="index", dtype=float)`.
-4. **Hardcoded API token** in source — moved to `os.environ.get()`.
-5. **Misleading chart y-axis** — axis starts at `min - 20` instead of zero, visually exaggerating differences. Noted but kept as-is per scope decision (chart is cosmetic, not used in the leaderboard calculation).
+## 2. Data Decisions That Mattered
 
-After fixing the bare `except`, I audited the actual data in `medal` and `country_code`:
+Fixing the code revealed two data quality issues that had a direct impact on the leaderboard counts:
 
-- **579 rows had valid medal data in non-canonical form** (`GOLD`, `gold`, `1st`, `2nd`, `3rd`, `G`, `S`, `B`, `Silver ` with trailing space). All were silently dropped by the original code. Fixed by adding a `normalise_medal()` function that maps aliases to canonical values before lookup.
-- **40 rows had a null `country_code`** but a valid `country_name`. Rather than dropping them, I built a `country_name → country_code` mapping from the rest of the data. All 40 resolved cleanly with no ambiguity. Fixed with `build_name_to_code()` imputation.
+- **Medal aliases (579 rows)** — the `medal` column contained valid medals in non-canonical form: `GOLD`, `gold`, `1st`, `2nd`, `3rd`, `G`, `S`, `B`, and `Silver ` with a trailing space. All were silently dropped by the original KeyError. A `normalise_medal()` function was added to map every variant to the canonical `Gold / Silver / Bronze` before lookup — recovering 579 real medals.
+- **Missing country codes (40 rows)** — 40 rows had `NaN` in `country_code`. Rather than dropping them, a `country_name → country_code` mapping was built from the rest of the dataset. All 40 resolved cleanly with no ambiguity. An important subtlety: `str(NaN)` = `"nan"` which is truthy, so a simple `if not country` guard would silently bucket all 40 under a phantom `"nan"` country. The fix uses `pd.isna()` to detect nulls correctly.
 
-Net effect: the repaired tool processes all 19,326 rows vs. the original's effective 18,747 — recovering 579 silently lost medals.
+Net effect: the repaired tool processes all 19,326 rows versus the original's effective 18,747.
 
----
+## 3. Finding
 
-## Phase 2 — The insight: home advantage is real and consistent
+We tested the popular hypothesis that hosting the Olympics gives a country a medal boost. Using the repaired leaderboard, we compared each host nation's medal count in their hosting year against their per-Games average across all other years.
 
-**Question asked:** Does hosting the Olympics give a country a measurable medal boost — and does that hold up when you control for confounders?
+The result holds: **12 of 13 hosts recorded more medals at home**, with a **median boost of +54%**. The two largest raw boosts (URS 1980, USA 1984) were driven by Cold War boycotts — the main competitor was absent. Removing those years, the pattern still holds across 12 of 13 remaining cases. The sole exception is **Greece 2004** (−13%), where hosting infrastructure investment did not translate to athlete performance.
 
-**Why not the naive answer:** "USA wins the most medals" is obvious. Medals per capita is more interesting but still just a ranking. Home advantage has a mechanism (crowd support, familiar conditions, no travel fatigue, political investment) and a falsifiable structure.
-
-**Finding:** Across 13 hosting nations (1960–2016), 12 of 13 recorded more medals in their hosting year than their per-Games average in all other years. The median boost is **+54%**.
-
-| Country | Host year | Medals (hosting) | Avg (other years) | Boost |
-|---------|-----------|-----------------|-------------------|-------|
-| GBR | 2012 | 215 | 81.7 | +163% |
-| AUS | 2000 | 170 | 71.9 | +136% |
-| CHN | 2008 | 225 | 101.9 | +121% |
-| USA | 1996 | 334 | 168.5 | +98% |
-| BRA | 2016 | 101 | 55.1 | +83% |
-| GRC | 2004 | 18 | 20.6 | **−13%** (only outlier) |
-
-**Stress test:** The two largest raw boosts (URS 1980, USA 1984) are explained by mutual boycotts — the main competitor was absent, not the host performing better. Removing those two years, the pattern still holds across 12/13 remaining cases with a median boost of +54%.
-
-**Honest caveats:**
-- This is a synthetic/illustrative dataset; the pattern may not hold in real Olympic data.
-- Sample is small (one hosting event per country). A country's "other years" average includes years when the country's programme may have changed (e.g. political changes, sport investment cycles).
-- Greece 2004 is the genuine outlier — a small country where hosting did not translate to medals, consistent with the narrative that investment in infrastructure doesn't equal investment in athlete development.
-- "What would falsify this": if the boost disappeared after controlling for year-on-year growth in a country's programme (i.e. the host year just happens to coincide with a strong cohort), the home-advantage story weakens. That test would require more years of data per country than this dataset provides.
+Caveat: sample is small (one hosting event per country) and the dataset is synthetic — the direction is consistent but the magnitude should not be over-interpreted.
